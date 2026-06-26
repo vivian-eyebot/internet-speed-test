@@ -21,8 +21,8 @@ class AutoSpeedTest:
 
     def __init__(self, device:str):
 
-        self.interval_seconds = 2 * 5   # 2 minutes
-        self.duration_seconds = 2 * 60 * 60   #2 hours
+        self.interval_seconds = 1 * 60   # 2 minutes
+        self.duration_seconds = 2 * 60   #2 hours
 
         self.start_time = None   # set when the run begins
         self.run_count = 0
@@ -124,24 +124,28 @@ class AutoSpeedTest:
 
 
     def run_speed_tests(self):
-        """Loop: run a test, then sleep until the next scheduled tick."""
+        """Loop: wait until the next wall-clock tick, then run a test.
+
+        Ticks are anchored to the wall clock (multiples of the interval since
+        the Unix epoch) rather than to this process's start time, so two
+        devices fire on the same :00 boundaries (12:00:00, 12:02:00, ...) and
+        their timestamps line up regardless of when each script was launched.
+        """
 
         self.start_time = time.monotonic()
 
-        while True:
+        while not self.is_done():
+            # Sleep until the next interval boundary on the wall clock. Both
+            # devices share the same epoch reference, so they wake together.
+            now = time.time()
+            next_tick = (int(now) // self.interval_seconds + 1) * self.interval_seconds
+            time.sleep(next_tick - now)
+
             self.run_count += 1
             print(f"--- Run {self.run_count}:  {datetime.now().time()}---")
             self.speed_test()  # runs one test, appends a row to results.csv
-
-            if self.is_done():
-                break
-
-            # Schedule ticks at start + n*interval so the test's own runtime
-            # (~15-40s) doesn't make the cadence drift past the interval.
-            next_run = self.start_time + self.run_count * self.interval_seconds
-            sleep_for = next_run - time.monotonic()
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+        
+        print(f"\nFinished logging network speed for {self.duration_seconds / 3600} hours.")
 
 
 def main():
@@ -155,7 +159,7 @@ def main():
     except KeyboardInterrupt:
         print("Ctrl+C received — closing devices")
     finally:
-        print(f"\nRecording saved to {test.csv_filename}")
+        print(f"\nLogging saved to file: {test.csv_filename}")
 
 
 if __name__ == "__main__":
