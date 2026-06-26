@@ -11,7 +11,7 @@ Downloads the [Ookla Speedtest CLI](https://www.speedtest.net/apps/cli) build in
 ## Run the speed test
 
 ```sh
-python3 speed_test.py --device testing_device --gcloud true_or_false
+python3.9 speed_test.py --device testing_device --gcloud true_or_false
 ```
 ### Flags
 ```
