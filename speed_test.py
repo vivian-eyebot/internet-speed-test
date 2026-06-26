@@ -89,6 +89,7 @@ class AutoSpeedTest:
             file_path = os.path.join(gcs.LOCAL_IMAGE_DIR, filename)
             if os.path.isfile(file_path):
                 os.remove(file_path)
+        print("[clean] clearing downloaded contents")
     
 
     def speed_test(self, timestamp):
@@ -180,8 +181,8 @@ class AutoSpeedTest:
 
             try:
                 self.speed_test(timestamp)
+                self.clear_folder()     # clear Test_Session_Images/
                 print(f"--- [finish] Run {self.run_count} in {str((datetime.now() - timestamp)).split('.')[0]}---")
-                self.clear_folder()     # clear Test_Session_Images
             except Exception as e:
                 print(f"Run {self.run_count} failed: {e}")
         
