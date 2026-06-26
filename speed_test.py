@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Run a speed test every 2 minutes for 2 hours on kiosk and test stand."""
 
-from __future__ import annotations
-
 import os
 import time
 import csv
@@ -10,9 +8,18 @@ import json
 import subprocess
 from datetime import datetime, timezone
 import argparse
+from typing import List, Optional
 
-import logs.speed_test as speed_test
-
+# GCS throughput benchmark. Swap this import to choose the implementation;
+# both modules expose an identical main() -> metrics dict, so the call below
+# works for either. Guarded so the speed test still runs if GCS/creds are
+# unavailable (e.g. on a dev machine that isn't the kiosk).
+try:
+    # import KioskDataClient as gcs            # standalone (no module-kiosk-data import)
+    import kiosk_data_client_comms as gcs  # repo-import version
+except Exception as _e:
+    print(f"GCS benchmark unavailable ({_e}); running speed test only.")
+    gcs = None
 
 
 get_folder_name = lambda: datetime.now().strftime("%Y%b%d_%H_%M_%S")
@@ -58,6 +65,7 @@ class AutoSpeedTest:
                 "server_name", "server_location",
                 "isp", "external_ip",
                 "is_vpn",
+                "gcs_upload_mbps", "gcs_download_mbps",
             ])
 
         print(f"Started recording to {self.csv_filename}")
@@ -99,11 +107,13 @@ class AutoSpeedTest:
             )
         except subprocess.TimeoutExpired:
             print("Speedtest timed out after 120s")
+            return
 
         if proc.returncode != 0:
             # CLI prints a JSON error on stdout, or a message on stderr.
             detail = (proc.stdout or proc.stderr or "").strip().replace("\n", " ")
             print(f"exit {proc.returncode}: {detail[:300]}")
+            return
 
         try:
             data = json.loads(proc.stdout)
@@ -115,7 +125,7 @@ class AutoSpeedTest:
         packet_loss = round(data["packetLoss"], 2) if data.get("packetLoss") is not None else ""
         interface = data.get("interface", {})
 
-        self.write_row([
+        row = [
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
             self.bandwidth_to_mbps(data["download"]["bandwidth"]),
             self.bandwidth_to_mbps(data["upload"]["bandwidth"]),
@@ -127,7 +137,25 @@ class AutoSpeedTest:
             data.get("isp", ""),
             interface.get("externalIp", ""),
             interface.get("isVpn", False),
-        ])
+        ]
+
+        # Ookla ran above; now run the GCS throughput tests on the same link so
+        # both measurements land on one CSV row for cross-checking. They run
+        # sequentially (never overlapping the Ookla test) so neither steals
+        # bandwidth from the other. A GCS failure must not kill the speed loop.
+        gcs_metrics = {}
+        if gcs is not None:
+            try:
+                gcs_metrics = gcs.main()
+            except Exception as e:
+                print(f"GCS benchmark failed: {e}")
+
+        row += [
+            gcs_metrics.get("gcs_upload_mbps", ""),
+            gcs_metrics.get("gcs_download_mbps", ""),
+        ]
+
+        self.write_row(row)
 
 
     def run_speed_tests(self):
@@ -150,18 +178,21 @@ class AutoSpeedTest:
 
             self.run_count += 1
             print(f"--- Run {self.run_count}:  {datetime.now().time()}---")
-            self.speed_test()  # runs one test, appends a row to results.csv
+            try:
+                self.speed_test()
+            except Exception as e:
+                print(f"Run {self.run_count} failed: {e}")
         
         print(f"\nFinished logging network speed for {self.duration_seconds / 3600} hours.")
 
-def parse_args(argv: list[str] | None = None):
+def parse_args(argv: Optional[List[str]] = None):
     p = argparse.ArgumentParser(description="Run network speed test on a device.")
     p.add_argument("--device", type=str, required=True, help="Run this script on the kiosk ('Kiosk') or the test stand ('Stand')")
     p.add_argument("--duration", type=int, required=False, help="Total duration in seconds to run the test for; default 2hrs")
     p.add_argument("--interval", type=int, required=False, help="Interval in seconds between network speed runs; default 2mins")
     return p.parse_args(argv)
 
-def main(argv: list[str] | None = None):
+def main(argv: Optional[List[str]] = None):
 
     args = parse_args(argv)
 
